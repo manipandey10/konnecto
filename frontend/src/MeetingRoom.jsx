@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import Whiteboard from "./whiteboard/Whiteboard.jsx";
 
-const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL;
+const API_URL = (import.meta.env.PROD ? import.meta.env.VITE_API_URL || "" : "").replace(/\/$/, "");
+const SOCKET_URL = import.meta.env.DEV ? undefined : import.meta.env.VITE_SOCKET_URL;
 
 async function request(path, token, options = {}) {
   const headers = new Headers(options.headers || {});

@@ -13,7 +13,7 @@ const meetingsocket = require("./src/socket/socket")
 
 const io = new Server(server, {
     cors: {
-        origin: process.env.FRONTEND_URL,
+        origin: app.get("frontendOrigin"),
         methods: ["GET", "POST"],
         credentials: true
     }
@@ -31,8 +31,19 @@ io.on("connection", (socket) => {
 });
 
 
-connectdb();
-let port = process.env.PORT || 3000
-server.listen(port,"0.0.0.0",(req,res) => {
-    console.log(`server is Stating at ${port}`)
-})
+async function startServer() {
+    if (!process.env.JWT_SECRET_KEY) {
+        throw new Error("JWT_SECRET_KEY environment variable is required");
+    }
+
+    await connectdb();
+    const port = process.env.PORT || 3000;
+    server.listen(port, "0.0.0.0", () => {
+        console.log(`Server is listening on port ${port}`);
+    });
+}
+
+startServer().catch((error) => {
+    console.error("Server startup failed:", error);
+    process.exitCode = 1;
+});

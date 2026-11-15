@@ -3,7 +3,7 @@ import { gsap } from "gsap";
 import MeetingRoom from "./MeetingRoom.jsx";
 
 const TOKEN_KEY = "gather-token";
-const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+const API_URL = (import.meta.env.PROD ? import.meta.env.VITE_API_URL || "" : "").replace(/\/$/, "");
 
 async function request(path, { token, ...options } = {}) {
   const headers = new Headers(options.headers || {});

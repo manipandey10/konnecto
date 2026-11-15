@@ -2,11 +2,12 @@
 
 ## Run locally
 
-1. Start the backend from `backend` with `node server.js` (the backend package currently has no start script).
-2. Copy `.env.example` to `.env` if the backend is not at `http://localhost:3000`, then set `VITE_BACKEND_URL` to its origin.
-3. In `frontend`, run `npm install`, then `npm run dev`.
+1. Configure `backend/.env` with `MONGODB_URL`, `JWT_SECRET_KEY`, and `FRONTEND_URL=http://localhost:5173`. `PORT` is optional and defaults to `3000`.
+2. In `backend`, run `npm install`, then `npm start`.
+3. Copy `.env.example` to `.env` in `frontend`. Set `VITE_BACKEND_URL` to the backend origin if it is not `http://localhost:3000`.
+4. In `frontend`, run `npm install`, then `npm run dev`.
 
-The Vite development server proxies `/api` and `/socket.io` (including WebSocket upgrades) to `VITE_BACKEND_URL`. The backend listens on port `3000`. In production, Express serves the Vite build and handles `/api` and `/socket.io` on the same origin.
+The Vite development server proxies `/api` and `/socket.io` (including WebSocket upgrades) to `VITE_BACKEND_URL`; local API and socket requests use this proxy. In production, Express serves the Vite build and handles `/api` and `/socket.io` on the same origin. Leave `VITE_API_URL` and `VITE_SOCKET_URL` unset for this deployment. If the frontend is hosted separately, set both to the backend origin and set backend `FRONTEND_URL` to the frontend's exact origin. Credentialed cookies are enabled for that origin.
 
 ## Docker deployment
 

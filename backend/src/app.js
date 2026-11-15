@@ -10,8 +10,10 @@ const backendPublic = path.join(__dirname, "../public")
 
 
 const app = express()
+const frontendOrigin = process.env.FRONTEND_URL || "http://localhost:5173";
+app.set("frontendOrigin", frontendOrigin);
 app.use(cors({
-    origin: process.env.FRONTEND_URL,
+    origin: frontendOrigin,
     credentials: true
 }));
 app.use(express.json());
