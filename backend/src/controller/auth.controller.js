@@ -1,4 +1,5 @@
 const usermodel = require("../model/user.model")
+const emailservice = require("../service/email.service")
 const jwt = require("jsonwebtoken")
 const bcrypt = require("bcryptjs")
 const blacklistedmodel = require("../model/blacklist.model")
@@ -48,8 +49,12 @@ async function userregister(req,res){
 
         }
     })
+
+
+    await emailservice.sendregisterationemail(user.email,user.name);
     
 }
+
 
 async function userlogin(req,res){
     const{email,name,password}= req.body;
@@ -82,6 +87,7 @@ async function userlogin(req,res){
         }
 
     })
+    await emailservice.sendregisterationemail(user.email,user.name);
 }
 
 async function userlogout(req,res){
