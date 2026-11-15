@@ -1,0 +1,20 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build files
+build/
+dist/
+
+# Docker files - keep local
+Dockerfile
+**/Dockerfile
+.dockerignore
+**/.dockerignore
+
+# Private keys
+*.pem
