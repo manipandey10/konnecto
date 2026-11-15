@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  appendOperationPoints,
   applyHistoryEvent,
   applyOperationEvent,
   normalizedPoint,
@@ -18,16 +19,23 @@ test("canvas coordinates normalize and clamp to the canvas", () => {
   assert.equal(normalizedPoint(10, 10, { left: 0, top: 0, width: 0, height: 100 }), null);
 });
 
-test("operation events add strokes once and append remote point batches", () => {
+test("operation events add strokes once", () => {
   const operation = { id: "stroke-1", points: [{ x: 0.1, y: 0.2 }] };
   const started = applyOperationEvent([], { action: "stroke-start", operation });
   assert.equal(applyOperationEvent(started, { action: "stroke-start", operation }), started);
-  const updated = applyOperationEvent(started, {
-    action: "stroke-points",
-    operationId: "stroke-1",
-    points: [{ x: 0.3, y: 0.4 }],
-  });
-  assert.deepEqual(updated[0].points, [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }]);
+  assert.equal(started.length, 1);
+});
+
+test("point batches append in place without replacing the board or stroke", () => {
+  const operation = { id: "stroke-1", points: [{ x: 0.1, y: 0.2 }] };
+  const operations = [operation];
+  const appended = appendOperationPoints(operations, "stroke-1", [{ x: 0.3, y: 0.4 }]);
+
+  assert.equal(appended.operation, operation);
+  assert.equal(appended.previous, operation.points[0]);
+  assert.equal(operations[0], operation);
+  assert.deepEqual(operation.points, [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }]);
+  assert.equal(appendOperationPoints(operations, "missing", [{ x: 0.5, y: 0.6 }]), null);
 });
 
 test("history events toggle only the selected operation", () => {

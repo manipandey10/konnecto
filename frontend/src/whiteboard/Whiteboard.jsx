@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  appendOperationPoints,
   applyHistoryEvent,
   applyOperationEvent,
   normalizedPoint,
@@ -40,7 +41,8 @@ function makeId(userId) {
   return `${userId}-${Date.now()}-${randomPart}`;
 }
 
-function drawStrokeSegment(canvas, operation, from, to) {
+function drawStrokePoints(canvas, operation, from, points) {
+  if (!points.length) return;
   const context = canvas?.getContext("2d");
   if (!context) return;
   const { width, height } = canvas.getBoundingClientRect();
@@ -51,16 +53,26 @@ function drawStrokeSegment(canvas, operation, from, to) {
   context.lineWidth = operation.size;
   context.lineCap = "round";
   context.lineJoin = "round";
-  context.beginPath();
-  if (from.x === to.x && from.y === to.y) {
-    context.arc(to.x * width, to.y * height, Math.max(operation.size / 2, 1), 0, Math.PI * 2);
+  const last = points[points.length - 1];
+  const hasMovement = from && points.some((point) => point.x !== from.x || point.y !== from.y);
+  if (!hasMovement) {
+    context.beginPath();
+    context.arc(last.x * width, last.y * height, Math.max(operation.size / 2, 1), 0, Math.PI * 2);
     context.fill();
   } else {
+    context.beginPath();
     context.moveTo(from.x * width, from.y * height);
-    context.lineTo(to.x * width, to.y * height);
+    points.forEach((point) => context.lineTo(point.x * width, point.y * height));
     context.stroke();
   }
   context.restore();
+}
+
+function drawOperationOnCanvas(canvas, operation) {
+  const context = canvas?.getContext("2d");
+  if (!context) return;
+  const rect = canvas.getBoundingClientRect();
+  drawOperation(context, operation, rect.width, rect.height);
 }
 
 function drawOperation(context, operation, width, height) {
@@ -197,9 +209,10 @@ export default function Whiteboard({ meetingId, socket, user, participants }) {
   const userId = userIdOf(user);
   const participantKey = participants.map(userIdOf).join(":");
 
-  function updateOperations(next) {
+  function updateOperations(next, redraw = true) {
     operationsRef.current = next;
     setOperations(next);
+    if (redraw) drawBoard(canvasRef.current, next);
   }
 
   function redrawPreview(draft) {
@@ -238,10 +251,6 @@ export default function Whiteboard({ meetingId, socket, user, participants }) {
   }, []);
 
   useEffect(() => {
-    drawBoard(canvasRef.current, operations);
-  }, [operations]);
-
-  useEffect(() => {
     if (!textDraft) return;
     textInputRef.current?.focus();
   }, [textDraft]);
@@ -263,21 +272,36 @@ export default function Whiteboard({ meetingId, socket, user, participants }) {
     const onOperation = (event = {}) => {
       if (event.meetingId !== meetingId || event.senderId === userId) return;
       if (event.action === "stroke-points") {
-        const current = operationsRef.current.find((operation) => operation.id === event.operationId);
-        if (!current) return;
-        const previous = current.points[current.points.length - 1];
+        const points = Array.isArray(event.points) ? event.points : [];
+        const appended = points.length
+          ? appendOperationPoints(operationsRef.current, event.operationId, points)
+          : null;
+        if (!appended) {
+          if (!stateRefreshRequestedRef.current) {
+            stateRefreshRequestedRef.current = true;
+            socket.emit("connecto:join", { meetingId });
+          }
+          return;
+        }
+        drawStrokePoints(canvasRef.current, appended.operation, appended.previous, points);
+        return;
+      }
+      if (event.action === "stroke-start") {
         const next = applyOperationEvent(operationsRef.current, event);
-        operationsRef.current = next;
-        const updated = next.find((operation) => operation.id === event.operationId);
-        let last = previous;
-        event.points.forEach((point) => {
-          drawStrokeSegment(canvasRef.current, updated, last, point);
-          last = point;
-        });
+        if (next === operationsRef.current) return;
+        updateOperations(next, false);
+        drawStrokePoints(canvasRef.current, event.operation, null, event.operation.points || []);
+        return;
+      }
+      if (event.action === "stroke-end") {
+        updateOperations([...operationsRef.current], false);
         return;
       }
       const next = applyOperationEvent(operationsRef.current, event);
-      if (next !== operationsRef.current) updateOperations(next);
+      if (next !== operationsRef.current) {
+        updateOperations(next, false);
+        drawOperationOnCanvas(canvasRef.current, event.operation);
+      }
     };
     const onHistory = (event = {}) => {
       if (event.meetingId !== meetingId) return;
@@ -382,7 +406,7 @@ export default function Whiteboard({ meetingId, socket, user, participants }) {
       const operation = { id, ownerId: userId, kind: "stroke", tool, color, size, points: [point], undone: false };
       operationsRef.current = [...operationsRef.current, operation];
       draftRef.current = { kind: "stroke", operation, pointerId: event.pointerId };
-      drawStrokeSegment(canvasRef.current, operation, point, point);
+      drawStrokePoints(canvasRef.current, operation, null, [point]);
       pendingPointsRef.current = [];
       socket.emit("connecto:stroke", {
         meetingId,
@@ -405,7 +429,15 @@ export default function Whiteboard({ meetingId, socket, user, participants }) {
   }
 
   function onPointerMove(event) {
-    const point = normalizedPoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect());
+    const rect = event.currentTarget.getBoundingClientRect();
+    const coalescedEvents = event.nativeEvent?.getCoalescedEvents?.();
+    const pointerEvents = coalescedEvents?.length
+      ? coalescedEvents
+      : [event.nativeEvent || event];
+    const points = pointerEvents
+      .map((pointerEvent) => normalizedPoint(pointerEvent.clientX, pointerEvent.clientY, rect))
+      .filter(Boolean);
+    const point = points[points.length - 1];
     if (!point) return;
     const now = Date.now();
     if (now - lastCursorSentRef.current >= 50) {
@@ -416,10 +448,17 @@ export default function Whiteboard({ meetingId, socket, user, participants }) {
     const draft = draftRef.current;
     if (!draft || draft.pointerId !== event.pointerId) return;
     if (draft.kind === "stroke") {
-      const previous = draft.operation.points[draft.operation.points.length - 1];
-      draft.operation.points.push(point);
-      drawStrokeSegment(canvasRef.current, draft.operation, previous, point);
-      pendingPointsRef.current.push(point);
+      let previous = draft.operation.points[draft.operation.points.length - 1];
+      const newPoints = points.filter((nextPoint) => {
+        const moved = nextPoint.x !== previous.x || nextPoint.y !== previous.y;
+        previous = nextPoint;
+        return moved;
+      });
+      if (!newPoints.length) return;
+      previous = draft.operation.points[draft.operation.points.length - 1];
+      draft.operation.points.push(...newPoints);
+      drawStrokePoints(canvasRef.current, draft.operation, previous, newPoints);
+      pendingPointsRef.current.push(...newPoints);
       if (!frameRef.current) {
         frameRef.current = requestAnimationFrame(() => flushPoints(draft.operation.id));
       }
@@ -432,17 +471,19 @@ export default function Whiteboard({ meetingId, socket, user, participants }) {
   function onPointerUp(event) {
     const draft = draftRef.current;
     if (!draft || draft.pointerId !== event.pointerId) return;
+    onPointerMove(event);
     if (draft.kind === "stroke") {
       flushPoints(draft.operation.id, true);
       socket.emit("connecto:stroke", { meetingId, id: draft.operation.id, phase: "end" });
-      updateOperations([...operationsRef.current]);
+      updateOperations([...operationsRef.current], false);
       setCanRedo(false);
     } else {
       const operation = draft.operation;
       const { start, end } = operation;
       if (Math.hypot(end.x - start.x, end.y - start.y) > 0.002) {
         operationsRef.current = [...operationsRef.current, operation];
-        updateOperations(operationsRef.current);
+        updateOperations(operationsRef.current, false);
+        drawOperationOnCanvas(canvasRef.current, operation);
         socket.emit("connecto:object", { meetingId, ...operation });
         setCanRedo(false);
       }
@@ -473,7 +514,8 @@ export default function Whiteboard({ meetingId, socket, user, participants }) {
       undone: false,
     };
     operationsRef.current = [...operationsRef.current, operation];
-    updateOperations(operationsRef.current);
+    updateOperations(operationsRef.current, false);
+    drawOperationOnCanvas(canvasRef.current, operation);
     socket.emit("connecto:object", { meetingId, ...operation });
     setCanRedo(false);
     setTextDraft(null);

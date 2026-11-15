@@ -242,14 +242,18 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    if (!token) {
+      setLoading(false);
+      return () => { active = false; };
+    }
+
     request("/api/user/getme", { token })
       .then((data) => {
         if (active) setUser(data.user);
       })
       .catch((requestError) => {
         if (!active) return;
-        if (!token && /TOKEN IS REQUIRED/i.test(requestError.message)) return;
-        if (/TOKEN IS REQUIRED|TOKEN IS BLACKLISTED|TOKEN IS INVALID|INVALID USER/i.test(requestError.message)) {
+        if (/TOKEN IS REQUIRED|TOKEN IS BLACKLISTED|TOKEN IS INVALID|INVALID USER|USER IS NOT FOUND/i.test(requestError.message)) {
           sessionStorage.removeItem(TOKEN_KEY);
           setToken("");
           setError("Your session expired. Please sign in again.");

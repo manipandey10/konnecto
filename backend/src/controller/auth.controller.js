@@ -1,7 +1,6 @@
 const usermodel = require("../model/user.model")
 const jwt = require("jsonwebtoken")
 const bcrypt = require("bcryptjs")
-const crypto = require("crypto")
 const blacklistedmodel = require("../model/blacklist.model")
 const cookieOptions = {
     httpOnly: true,
@@ -90,9 +89,7 @@ async function userlogout(req,res){
     const bearerToken = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1];
     const token = bearerToken || req.cookies?.token;
     if(token){
-    const blacklisted = await blacklistedmodel.create({
-        token
-      })
+        await blacklistedmodel.create({ token });
     }
 
     res.clearCookie("token", cookieOptions)

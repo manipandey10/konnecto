@@ -81,8 +81,11 @@ export default function MeetingRoom({ meetingId, code, token, user, onExit }) {
   const mediaStatusChannelRef = useRef(null);
   const mediaStatusRef = useRef({ microphone: true, camera: true });
   const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
   const pendingOfferRef = useRef(null);
   const pendingCandidatesRef = useRef([]);
+  const callSetupRef = useRef(false);
+  const callAttemptRef = useRef(0);
   const leaveTimerRef = useRef(null);
   const messagesEndRef = useRef(null);
   const localVideoRef = useRef(null);
@@ -110,16 +113,32 @@ export default function MeetingRoom({ meetingId, code, token, user, onExit }) {
   }, [meetingId, token]);
 
   function closeCall(notifyPeer = false) {
+    callAttemptRef.current += 1;
+    callSetupRef.current = false;
     if (notifyPeer) {
       socketRef.current?.emit("webrtc-hangup", { meetingId });
     }
-    peerConnectionRef.current?.close();
+    const peer = peerConnectionRef.current;
     peerConnectionRef.current = null;
+    if (peer) {
+      peer.onicecandidate = null;
+      peer.ontrack = null;
+      peer.ondatachannel = null;
+      peer.onconnectionstatechange = null;
+      peer.close();
+    }
     mediaStatusChannelRef.current?.close();
     mediaStatusChannelRef.current = null;
     mediaStatusRef.current = { microphone: true, camera: true };
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
+    remoteStreamRef.current?.getTracks().forEach((track) => {
+      track.onmute = null;
+      track.onunmute = null;
+      track.onended = null;
+      track.stop();
+    });
+    remoteStreamRef.current = null;
     pendingOfferRef.current = null;
     pendingCandidatesRef.current = [];
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
@@ -132,15 +151,24 @@ export default function MeetingRoom({ meetingId, code, token, user, onExit }) {
     setCallStatus("idle");
   }
 
-  async function getLocalStream() {
+  async function getLocalStream(attempt) {
+    if (attempt !== callAttemptRef.current) return null;
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error("Video calling requires a secure connection and a supported browser.");
     }
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    if (attempt !== callAttemptRef.current) {
+      stream.getTracks().forEach((track) => track.stop());
+      return null;
+    }
     localStreamRef.current = stream;
     if (localVideoRef.current) localVideoRef.current.srcObject = stream;
     setHasLocalVideo(true);
     return stream;
+  }
+
+  function addLocalTracks(peer, stream) {
+    stream.getTracks().forEach((track) => peer.addTrack(track, stream));
   }
 
   function sendMediaStatus() {
@@ -202,9 +230,6 @@ export default function MeetingRoom({ meetingId, code, token, user, onExit }) {
     });
     peerConnectionRef.current = peer;
 
-    localStreamRef.current?.getTracks().forEach((track) => {
-      peer.addTrack(track, localStreamRef.current);
-    });
     peer.onicecandidate = ({ candidate }) => {
       if (candidate) {
         socketRef.current?.emit("webrtc-ice-candidate", {
@@ -213,13 +238,12 @@ export default function MeetingRoom({ meetingId, code, token, user, onExit }) {
         });
       }
     };
-    peer.ontrack = ({ streams, track }) => {
-      if (!remoteVideoRef.current) return;
-      if (streams[0]) {
-        remoteVideoRef.current.srcObject = streams[0];
-      } else {
-        const remoteStream = remoteVideoRef.current.srcObject || new MediaStream();
-        remoteStream.addTrack(track);
+    peer.ontrack = ({ track }) => {
+      if (peerConnectionRef.current !== peer) return;
+      const remoteStream = remoteStreamRef.current || new MediaStream();
+      if (!remoteStream.getTrackById(track.id)) remoteStream.addTrack(track);
+      remoteStreamRef.current = remoteStream;
+      if (remoteVideoRef.current?.srcObject !== remoteStream && remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = remoteStream;
       }
       if (track.kind === "video") {
@@ -246,6 +270,7 @@ export default function MeetingRoom({ meetingId, code, token, user, onExit }) {
       if (channel) attachMediaStatusChannel(channel);
     }
     peer.onconnectionstatechange = () => {
+      if (peerConnectionRef.current !== peer) return;
       if (peer.connectionState === "failed") {
         closeCall(false);
         setCallStatus("failed");
@@ -256,20 +281,28 @@ export default function MeetingRoom({ meetingId, code, token, user, onExit }) {
   }
 
   async function addPendingCandidates(peer) {
-    const candidates = pendingCandidatesRef.current;
-    pendingCandidatesRef.current = [];
-    for (const candidate of candidates) {
-      await peer.addIceCandidate(candidate);
+    while (pendingCandidatesRef.current.length) {
+      const candidate = pendingCandidatesRef.current.shift();
+      try {
+        await peer.addIceCandidate(candidate);
+      } catch (candidateError) {
+        setMediaError(candidateError.message || "Could not add a video connection candidate.");
+      }
     }
   }
 
   async function startVideoCall() {
-    if (!canStartVideoCall || (callStatus !== "idle" && callStatus !== "failed")) return;
+    if (!canStartVideoCall || callSetupRef.current ||
+        (callStatus !== "idle" && callStatus !== "failed")) return;
+    callSetupRef.current = true;
+    const attempt = ++callAttemptRef.current;
     setMediaError("");
     setCallStatus("calling");
     try {
-      await getLocalStream();
+      const stream = await getLocalStream(attempt);
+      if (!stream) return;
       const peer = createPeerConnection(true);
+      addLocalTracks(peer, stream);
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
       socketRef.current?.emit("webrtc-offer", {
@@ -277,21 +310,28 @@ export default function MeetingRoom({ meetingId, code, token, user, onExit }) {
         offer: peer.localDescription.toJSON(),
       });
     } catch (callError) {
+      if (attempt !== callAttemptRef.current) return;
       closeCall(false);
       setMediaError(callError.message || "Could not start the video call.");
+    } finally {
+      if (attempt === callAttemptRef.current) callSetupRef.current = false;
     }
   }
 
   async function acceptVideoCall() {
     const offer = pendingOfferRef.current;
-    if (!offer) return;
+    if (!offer || callSetupRef.current) return;
+    callSetupRef.current = true;
+    const attempt = ++callAttemptRef.current;
     setMediaError("");
     setCallStatus("connecting");
     try {
-      await getLocalStream();
       const peer = createPeerConnection();
       await peer.setRemoteDescription(offer);
       await addPendingCandidates(peer);
+      const stream = await getLocalStream(attempt);
+      if (!stream) return;
+      addLocalTracks(peer, stream);
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
       socketRef.current?.emit("webrtc-answer", {
@@ -300,8 +340,11 @@ export default function MeetingRoom({ meetingId, code, token, user, onExit }) {
       });
       pendingOfferRef.current = null;
     } catch (callError) {
+      if (attempt !== callAttemptRef.current) return;
       closeCall(false);
       setMediaError(callError.message || "Could not accept the video call.");
+    } finally {
+      if (attempt === callAttemptRef.current) callSetupRef.current = false;
     }
   }
 
