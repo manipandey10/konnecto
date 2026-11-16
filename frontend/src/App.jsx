@@ -77,10 +77,90 @@ function AuthPanel({ onAuthenticated }) {
   const [mode, setMode] = useState("login");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [otpPending, setOtpPending] = useState(null);
+  const [otpInput, setOtpInput] = useState("");
+  const [countdown, setCountdown] = useState(0);
+
+  useEffect(() => {
+    if (countdown <= 0) return undefined;
+    const timer = window.setTimeout(() => setCountdown((current) => Math.max(current - 1, 0)), 1000);
+    return () => window.clearTimeout(timer);
+  }, [countdown]);
+
+  function clearNotice() {
+    setError("");
+    setSuccess("");
+  }
+
+  function maskEmail(email) {
+    if (!email) return "your email";
+    const [localPart, domain] = email.split("@");
+    if (!domain) return email;
+    const visible = localPart.length > 2 ? `${localPart.slice(0, 2)}***` : `${localPart.slice(0, 1)}***`;
+    return `${visible}@${domain}`;
+  }
+
+  async function verifyOtpSubmit(event) {
+    event.preventDefault();
+    if (!otpPending) return;
+
+    setError("");
+    setSuccess("");
+    setBusy(true);
+
+    try {
+      const data = await request("/api/user/verify-otp", {
+        method: "POST",
+        body: JSON.stringify({
+          email: otpPending.email,
+          otp: otpInput,
+          purpose: otpPending.purpose,
+        }),
+      });
+
+      if (!data.token) throw new Error("Verification response did not include a token.");
+      sessionStorage.setItem(TOKEN_KEY, data.token);
+      const profile = await request("/api/user/getme", { token: data.token });
+      setOtpPending(null);
+      setOtpInput("");
+      setCountdown(0);
+      onAuthenticated(profile.user);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resendOtp() {
+    if (!otpPending || countdown > 0) return;
+
+    setError("");
+    setSuccess("");
+    setBusy(true);
+
+    try {
+      await request("/api/user/resend-otp", {
+        method: "POST",
+        body: JSON.stringify({
+          email: otpPending.email,
+          purpose: otpPending.purpose,
+        }),
+      });
+      setSuccess("A fresh OTP has been sent. Please check your inbox.");
+      setCountdown(60);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submit(event) {
     event.preventDefault();
     setError("");
+    setSuccess("");
     setBusy(true);
     const form = new FormData(event.currentTarget);
     const password = form.get("password");
@@ -101,6 +181,19 @@ function AuthPanel({ onAuthenticated }) {
         mode === "register" ? "/api/user/create" : "/api/user/login",
         { method: "POST", body: JSON.stringify(payload) },
       );
+
+      if (data.requiresOtp) {
+        const email = data.user?.email || payload.email || String(form.get("identifier") || "").trim();
+        setOtpPending({
+          email,
+          purpose: mode === "register" ? "registration" : "login",
+        });
+        setOtpInput("");
+        setCountdown(60);
+        setSuccess("OTP sent to your email. Enter the 6-digit code to continue.");
+        return;
+      }
+
       if (!data.token) throw new Error("Authentication response did not include a token.");
       sessionStorage.setItem(TOKEN_KEY, data.token);
       const profile = await request("/api/user/getme", { token: data.token });
@@ -112,11 +205,48 @@ function AuthPanel({ onAuthenticated }) {
     }
   }
 
+  if (otpPending) {
+    return (
+      <section className="auth-card" aria-labelledby="otp-heading">
+        <div className="auth-content">
+          <p className="eyebrow">VERIFY IDENTITY</p>
+          <h2 id="otp-heading">Enter the OTP</h2>
+          <p className="auth-subtitle">We sent a 6-digit code to {maskEmail(otpPending.email)}.</p>
+          <Notice tone="success">{success}</Notice>
+          <Notice>{error}</Notice>
+          <form className="auth-form" onSubmit={verifyOtpSubmit}>
+            <label htmlFor="otp">OTP code</label>
+            <input
+              id="otp"
+              value={otpInput}
+              onChange={(event) => setOtpInput(event.target.value.replace(/\D/g, "").slice(0, 6))}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="123456"
+              maxLength={6}
+              required
+            />
+            <button className="button button-dark auth-submit" type="submit" disabled={busy || otpInput.length !== 6}>
+              {busy ? "Verifying…" : "Verify OTP"}
+              {!busy && <Icon name="arrow" size={18} />}
+            </button>
+            <button className="button button-outline" type="button" onClick={resendOtp} disabled={busy || countdown > 0}>
+              {countdown > 0 ? `Resend in ${countdown}s` : "Resend OTP"}
+            </button>
+            <button className="button button-link" type="button" onClick={() => { setOtpPending(null); setOtpInput(""); setCountdown(0); clearNotice(); }}>
+              Back to sign in
+            </button>
+          </form>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="auth-card" aria-labelledby="auth-heading">
       <div className="auth-tabs" role="tablist" aria-label="Account options">
-        <button className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setError(""); }} role="tab" aria-selected={mode === "login"}>Sign in</button>
-        <button className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setError(""); }} role="tab" aria-selected={mode === "register"}>Create account</button>
+        <button className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); clearNotice(); }} role="tab" aria-selected={mode === "login"}>Sign in</button>
+        <button className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); clearNotice(); }} role="tab" aria-selected={mode === "register"}>Create account</button>
       </div>
       <div className="auth-content">
         <p className="eyebrow">{mode === "login" ? "WELCOME BACK" : "GET STARTED"}</p>

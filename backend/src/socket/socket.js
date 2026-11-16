@@ -22,7 +22,7 @@ function isIceCandidate(value) {
         (value.usernameFragment == null || typeof value.usernameFragment === "string")
 }
 
-function meetingsocket(io, socket) {
+function handleMeetingSocket(io, socket) {
     whiteboard.attachWhiteboardEvents(io, socket);
 
     socket.on("join-meeting", async ({ meetingId } = {}) => {
@@ -252,4 +252,4 @@ function meetingsocket(io, socket) {
   
 
 }
-module.exports = meetingsocket
+module.exports = handleMeetingSocket;

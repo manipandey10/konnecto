@@ -9,6 +9,8 @@
 
 The Vite development server proxies `/api` and `/socket.io` (including WebSocket upgrades) to `VITE_BACKEND_URL`; local API and socket requests use this proxy. In production, Express serves the Vite build and handles `/api` and `/socket.io` on the same origin. Leave `VITE_API_URL` and `VITE_SOCKET_URL` unset for this deployment. If the frontend is hosted separately, set both to the backend origin and set backend `FRONTEND_URL` to the frontend's exact origin. Credentialed cookies are enabled for that origin.
 
+If an API request returns `Cannot POST /api/user/create`, check that the process listening on `VITE_BACKEND_URL` is KONNECTO's backend. If port `3000` is occupied by another local app, run KONNECTO with `PORT=3001` and set `VITE_BACKEND_URL=http://localhost:3001` before starting Vite.
+
 ## Docker deployment
 
 From the project root, build and run the image:
